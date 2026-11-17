@@ -8,10 +8,12 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const URL_LOGIN_SGEP = process.env.SGEP_URL || 'https://sistemassartec.com.br';
-const URL_ESTOQUE_SGEP = process.env.SGEP_ESTOQUE_URL || 'https://sistemassartec.com.br/ConsEstoqueProdutoNovo/FiltroConsultaEstoque';
+const DOMINIO_SGEP = 'https://' + 'amazonnorte' + '.sistemassartec.com.br';
+const URL_LOGIN_SGEP = DOMINIO_SGEP + '/WebSGEP';
+const URL_ESTOQUE_SGEP = DOMINIO_SGEP + '/WebSGEP/ConsEstoqueProdutoNovo/FiltroConsultaEstoque';
 const USUARIO_SGEP = process.env.SGEP_USER || 'Beto';
 const SENHA_SGEP = process.env.SGEP_PASS || '@464';
+
 
 const CLIENTES_CADASTRADOS = {
   CA: {
