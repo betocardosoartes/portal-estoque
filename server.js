@@ -14,12 +14,11 @@ const URL_ESTOQUE_SGEP = DOMINIO_SGEP + '/WebSGEP/ConsEstoqueProdutoNovo/FiltroC
 const USUARIO_SGEP = process.env.SGEP_USER || 'Beto';
 const SENHA_SGEP = process.env.SGEP_PASS || '@464';
 
-
 const CLIENTES_CADASTRADOS = {
   CA: {
     nomeCompleto: 'C A DOS PASSOS',
     filtroSgep: 'C A DOS PASSOS',
-    senhaAcesso: '123456'
+    senhaAcesso: '456'
   }
 };
 
@@ -49,15 +48,40 @@ app.post('/baixar', async (req, res) => {
         '--no-zygote'
       ]
     });
-    const context = await browser.newContext({ acceptDownloads: true });
+
+    const context = await browser.newContext({
+      acceptDownloads: true,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    });
     const page = await context.newPage();
     page.setDefaultTimeout(25000);
 
-   etapa = 'Acessando tela de login';
-    await page.goto(URL_LOGIN_SGEP, { waitUntil: 'networkidle' });
-    await page.locator('input:not([type="password"]):not([type="hidden"]):not([type="submit"])').first().fill(USUARIO_SGEP);
-    await page.locator('input[type="password"]').first().fill(SENHA_SGEP);
-    await page.keyboard.press('Enter');
+    etapa = 'Acessando tela de login';
+    await page.goto(URL_LOGIN_SGEP, { waitUntil: 'load' });
+    await page.waitForTimeout(3000);
+
+    let frameAlvo = page;
+    let campoSenha = page.locator('input[type="password"]').first();
+
+    if ((await campoSenha.count()) === 0) {
+      for (const f of page.frames()) {
+        if ((await f.locator('input[type="password"]').count()) > 0) {
+          frameAlvo = f;
+          campoSenha = f.locator('input[type="password"]').first();
+          break;
+        }
+      }
+    }
+
+    if ((await campoSenha.count()) === 0) {
+      const tituloPagina = await page.title();
+      throw new Error('Campos de login nao encontrados. Titulo da pagina: ' + tituloPagina);
+    }
+
+    const campoUsuario = frameAlvo.locator('input:visible').first();
+    await campoUsuario.fill(USUARIO_SGEP);
+    await campoSenha.fill(SENHA_SGEP);
+    await campoSenha.press('Enter');
     await page.waitForLoadState('networkidle');
 
     etapa = 'Abrindo pagina de estoque';
@@ -241,6 +265,5 @@ async function formatarPlanilha(caminhoArquivo, nomeCliente, sigla, agora) {
   ws.columns = [{ width: 12 }, { width: 12 }, { width: 58 }, { width: 16 }, { width: 14 }, { width: 12 }, { width: 16 }];
   return await wb.xlsx.writeBuffer();
 }
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => console.log('Portal rodando na porta ' + PORT));
