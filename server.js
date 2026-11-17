@@ -35,43 +35,63 @@ app.post('/baixar', async (req, res) => {
   }
 
   let browser;
+  let etapa = 'Iniciando navegador';
   try {
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote'
+      ]
     });
     const context = await browser.newContext({ acceptDownloads: true });
     const page = await context.newPage();
+    page.setDefaultTimeout(25000);
 
-    await page.goto(URL_LOGIN_SGEP, { waitUntil: 'networkidle' });
-    await page.fill('input[type="text"], input[name*="Login"], input[name*="Usuario"]', USUARIO_SGEP);
-    await page.fill('input[type="password"]', SENHA_SGEP);
-    await page.click('button[type="submit"], input[type="submit"]');
+    etapa = 'Acessando tela de login';
+    await page.goto(URL_LOGIN_SGEP, { waitUntil: 'domcontentloaded' });
+    await page.locator('input[type="text"], input[name*="Login"], input[name*="Usuario"]').first().fill(USUARIO_SGEP);
+    await page.locator('input[type="password"]').first().fill(SENHA_SGEP);
+    await page.locator('button[type="submit"], input[type="submit"], button:has-text("Entrar"), button:has-text("Acessar")').first().click();
     await page.waitForLoadState('networkidle');
 
+    etapa = 'Abrindo pagina de estoque';
     await page.goto(URL_ESTOQUE_SGEP, { waitUntil: 'networkidle' });
 
+    etapa = 'Selecionando cliente no filtro';
     const seletorCliente = page.locator('.bootstrap-select').filter({ hasText: /Nada selecionado|Cliente/i }).first();
     if (await seletorCliente.count() > 0) {
-      await seletorCliente.locator('button').click();
+      await seletorCliente.locator('button').first().click();
     } else {
       await page.locator('.bootstrap-select button').first().click();
     }
 
-    await page.keyboard.type(cliente.filtroSgep, { delay: 50 });
+    const caixaBusca = page.locator('.dropdown-menu.open .bs-searchbox input, .dropdown-menu.show .bs-searchbox input, .bs-searchbox input').first();
+    if (await caixaBusca.isVisible()) {
+      await caixaBusca.fill(cliente.filtroSgep);
+    } else {
+      await page.keyboard.type(cliente.filtroSgep, { delay: 50 });
+    }
+    await page.waitForTimeout(800);
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(800);
 
-    const btnPesquisar = page.locator('button:has-text("Pesquisar"), button:has-text("Consultar"), button:has-text("Filtrar")').first();
-    if (await btnPesquisar.count() > 0) {
+    etapa = 'Clicando em Pesquisar';
+    const btnPesquisar = page.locator('button:has-text("Pesquisar"), button:has-text("Consultar"), button:has-text("Filtrar"), input[value*="Pesquisar"]').first();
+    if (await btnPesquisar.count() > 0 && await btnPesquisar.isVisible()) {
       await btnPesquisar.click();
       await page.waitForLoadState('networkidle');
     }
 
+    etapa = 'Baixando arquivo Excel';
     const downloadPromise = page.waitForEvent('download', { timeout: 30000 });
-    await page.locator('button:has-text("Excel"), a:has-text("Excel"), .buttons-excel, [title*="Excel"]').first().click();
+    await page.locator('button:has-text("Excel"), a:has-text("Excel"), .buttons-excel, [title*="Excel"], button:has-text("Exportar"), a:has-text("Exportar")').first().click();
     const download = await downloadPromise;
 
+    etapa = 'Formatando planilha';
     const caminhoBruto = path.join(__dirname, 'temp_' + sigla + '_' + Date.now() + '.xlsx');
     await download.saveAs(caminhoBruto);
 
@@ -94,8 +114,8 @@ app.post('/baixar', async (req, res) => {
 
   } catch (erro) {
     if (browser) await browser.close();
-    console.error('Erro WebSGEP:', erro);
-    res.status(500).json({ mensagem: 'Nao foi possivel gerar a planilha agora. Tente novamente.' });
+    console.error('Erro na etapa [' + etapa + ']:', erro);
+    res.status(500).json({ mensagem: 'Falha na etapa "' + etapa + '": ' + erro.message });
   }
 });
 
