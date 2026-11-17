@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Consulta de Estoque</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+    .card { background: white; padding: 28px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 90%; max-width: 360px; }
+    h2 { color: #1F3864; margin-top: 0; text-align: center; }
+    label { display: block; margin-top: 15px; font-weight: bold; color: #333; font-size: 14px; }
+    select, input { width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+    button { width: 100%; padding: 14px; background: #1F3864; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; margin-top: 22px; cursor: pointer; }
+    button:disabled { background: #7a8ba8; }
+    #status { margin-top: 15px; text-align: center; font-size: 14px; color: #1F3864; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Estoque Atualizado</h2>
+    <label for="sigla">Selecione sua Sigla:</label>
+    <select id="sigla">
+      <option value="CA">CA</option>
+    </select>
+
+    <label for="senha">Senha de Acesso:</label>
+    <input type="password" id="senha" placeholder="Digite sua senha">
+
+    <button id="btnBaixar" onclick="solicitarPlanilha()">Baixar Planilha</button>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    async function solicitarPlanilha() {
+      const sigla = document.getElementById('sigla').value;
+      const senha = document.getElementById('senha').value;
+      const btn = document.getElementById('btnBaixar');
+      const status = document.getElementById('status');
+
+      if (!senha) {
+        status.style.color = 'red';
+        status.innerText = 'Digite a senha cadastrada.';
+        return;
+      }
+
+      btn.disabled = true;
+      status.style.color = '#1F3864';
+      status.innerText = 'Consultando estoque... Aguarde cerca de 15 segundos.';
+
+      try {
+        const response = await fetch('/baixar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sigla, senha })
+        });
+
+        if (!response.ok) {
+          const erro = await response.json();
+          throw new Error(erro.mensagem || 'Erro ao gerar arquivo');
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Estoque_' + sigla + '.xlsx';
+        a.click();
+        window.URL.revokeObjectURL(url);
+
+        status.style.color = 'green';
+        status.innerText = 'Download concluido!';
+      } catch (err) {
+        status.style.color = 'red';
+        status.innerText = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
