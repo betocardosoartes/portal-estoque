@@ -14,17 +14,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// =========================================================================
-// CONFIGURAÇÕES DO WEBSGEP
-// =========================================================================
 const URL_LOGIN_SGEP = process.env.SGEP_URL || 'https://sistemassartec.com.br';
 const URL_ESTOQUE_SGEP = process.env.SGEP_ESTOQUE_URL || 'https://sistemassartec.com.br/ConsEstoqueProdutoNovo/FiltroConsultaEstoque';
 const USUARIO_SGEP = process.env.SGEP_USER || 'Beto';
 const SENHA_SGEP = process.env.SGEP_PASS || '@464';
 
-// =========================================================================
-// CADASTRO DE CLIENTES
-// =========================================================================
 const CLIENTES_CADASTRADOS = {
   'CA': {
     nomeCompleto: 'C A DOS PASSOS',
@@ -41,9 +35,6 @@ const CLIENTES_CADASTRADOS = {
   */
 };
 
-// =========================================================================
-// TELA QUE APARECE NO CELULAR DO CLIENTE
-// =========================================================================
 app.get('/', (req, res) => {
   const opcoesHtml = Object.entries(CLIENTES_CADASTRADOS)
     .map(([sigla]) => `<option value="${sigla}">${sigla}</option>`)
@@ -132,9 +123,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-// =========================================================================
-// ROTA QUE LOGA NO WEBSGEP, FILTRA O CLIENTE, FORMATA E ENTREGA O EXCEL
-// =========================================================================
 app.post('/baixar', async (req, res) => {
   const { sigla, senha } = req.body;
   const cliente = CLIENTES_CADASTRADOS[sigla];
@@ -145,7 +133,10 @@ app.post('/baixar', async (req, res) => {
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
     const context = await browser.newContext({ acceptDownloads: true });
     const page = await context.newPage();
 
@@ -206,15 +197,12 @@ app.post('/baixar', async (req, res) => {
   }
 });
 
-// =========================================================================
-// LÓGICA DE FORMATAÇÃO
-// =========================================================================
 function extrairEspecie(nomeProduto) {
   const texto = String(nomeProduto || '').trim().toUpperCase();
   if (!texto) return 'OUTROS';
   const partes = texto.split(/[\.\s]+/).filter(Boolean);
-  const primeira = partes[0] || '';
-  const segunda = partes[1] || '';
+  const primeira = partes || '';
+  const segunda = partes || '';
 
   if (primeira === 'P' || primeira === 'PESC' || primeira === 'PESCADA') {
     const mapa = { 'AMARELA': 'PESCADA AMARELA', 'BANANA': 'PESCADA BANANA', 'BRANCA': 'PESCADA BRANCA', 'CURUCA': 'PESCADA CURUCA', 'GO': 'PESCADA GO' };
@@ -229,7 +217,7 @@ function extrairEspecie(nomeProduto) {
 async function formatarPlanilha(caminhoArquivo, nomeCliente, sigla, agora) {
   const wbOrig = new ExcelJS.Workbook();
   await wbOrig.xlsx.load(fs.readFileSync(caminhoArquivo));
-  const sheetOrig = wbOrig.worksheets[0];
+  const sheetOrig = wbOrig.worksheets;
 
   let dados = [];
   sheetOrig.eachRow((row) => {
@@ -238,28 +226,33 @@ async function formatarPlanilha(caminhoArquivo, nomeCliente, sigla, agora) {
     const prodUpper = produto.toUpperCase();
 
     if (!produto || prodUpper.startsWith('SGEP') || codExt.toUpperCase().startsWith('SGEP')) return;
-if (prodUpper === 'PRODUTO' || codExt.toUpperCase() === 'COD.EXT' || codExt === produto) return;
-if (prodUpper.startsWith('TOTAL') || prodUpper.startsWith('SUBTOTAL')) return;
-const parseNum = (v) => typeof v === 'number' ? v : (Number(String(v || 0).replace(/./g, '').replace(',', '.')) || 0);
-dados.push({
-codExt: row.getCell(1).value,
-codNf: row.getCell(2).value,
-produto,
-secundaria: row.getCell(4).value,
-primaria: row.getCell(5).value,
-vol: parseNum(row.getCell(6).value),
-saldoKgs: parseNum(row.getCell(7).value),
-especie: extrairEspecie(produto)
-});
-});
-const grupos = {};
-dados.forEach(item => {
-if (!grupos[item.especie]) grupos[item.especie] = [];
-grupos[item.especie].push(item);
-});
-const wb = new ExcelJS.Workbook();
-const ws = wb.addWorksheet('Estoque Formatado');
-ws.getCell('A1').value = nomeCliente;
+    if (prodUpper === 'PRODUTO' || codExt.toUpperCase() === 'COD.EXT' || codExt === produto) return;
+    if (prodUpper.startsWith('TOTAL') || prodUpper.startsWith('SUBTOTAL')) return;
+
+    const parseNum = (v) => typeof v === 'number' ? v : (Number(String(v || 0).replace(/\./g, '').replace(',', '.')) || 0);
+
+    dados.push({
+      codExt: row.getCell(1).value,
+      codNf: row.getCell(2).value,
+      produto,
+      secundaria: row.getCell(4).value,
+      primaria: row.getCell(5).value,
+      vol: parseNum(row.getCell(6).value),
+      saldoKgs: parseNum(row.getCell(7).value),
+      especie: extrairEspecie(produto)
+    });
+  });
+
+  const grupos = {};
+  dados.forEach(item => {
+    if (!grupos[item.especie]) grupos[item.especie] = [];
+    grupos[item.especie].push(item);
+  });
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Estoque Formatado');
+
+  ws.getCell('A1').value = nomeCliente;
 ws.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF1F3864' } };
 const dataAtual = agora.toLocaleDateString('pt-BR');
 ws.getCell('A2').value = Dentro da validade + cliente ${sigla}. • Data-base ${dataAtual};
@@ -312,4 +305,4 @@ ws.columns = [{ width: 12 }, { width: 12 }, { width: 58 }, { width: 16 }, { widt
 return await wb.xlsx.writeBuffer();
 }
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(Portal rodando na porta ${PORT}));
+app.listen(PORT, '0.0.0.0', () => console.log(Portal rodando na porta ${PORT}));
