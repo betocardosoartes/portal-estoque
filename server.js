@@ -53,11 +53,11 @@ app.post('/baixar', async (req, res) => {
     const page = await context.newPage();
     page.setDefaultTimeout(25000);
 
-    etapa = 'Acessando tela de login';
-    await page.goto(URL_LOGIN_SGEP, { waitUntil: 'domcontentloaded' });
-    await page.locator('input[type="text"], input[name*="Login"], input[name*="Usuario"]').first().fill(USUARIO_SGEP);
+   etapa = 'Acessando tela de login';
+    await page.goto(URL_LOGIN_SGEP, { waitUntil: 'networkidle' });
+    await page.locator('input:not([type="password"]):not([type="hidden"]):not([type="submit"])').first().fill(USUARIO_SGEP);
     await page.locator('input[type="password"]').first().fill(SENHA_SGEP);
-    await page.locator('button[type="submit"], input[type="submit"], button:has-text("Entrar"), button:has-text("Acessar")').first().click();
+    await page.keyboard.press('Enter');
     await page.waitForLoadState('networkidle');
 
     etapa = 'Abrindo pagina de estoque';
