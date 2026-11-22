@@ -14,7 +14,7 @@ socket.setdefaulttimeout(15)
 EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASS = os.getenv("EMAIL_PASS", "")
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.titan.email")
-ASSUNTO_BUSCA = os.getenv("ASSUNTO_BUSCA", "Relatorio")
+ASSUNTO_BUSCA = os.getenv("ASSUNTO_BUSCA", "SGEP - Estoque")
 
 CLIENTES_ABAS = {
     "AZUMA": "AZ482",
@@ -32,67 +32,33 @@ CLIENTES_ABAS = {
     "ALLFOODS": "AF512",
 }
 
-def decodificar_nome_arquivo(nome_bruto):
-    if not nome_bruto:
+def decodificar_texto(texto_bruto):
+    if not texto_bruto:
         return ""
-    partes = decode_header(nome_bruto)
-    nome_final = ""
+    partes = decode_header(texto_bruto)
+    resultado = ""
     for texto, encoding in partes:
         if isinstance(texto, bytes):
-            nome_final += texto.decode(encoding or "utf-8", errors="ignore")
+            resultado += texto.decode(encoding or "utf-8", errors="ignore")
         else:
-            nome_final += texto
-    return nome_final
+            resultado += texto
+    return resultado
 
-def obter_info_ultimo_anexo():
-    try:
-        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-        mail.login(EMAIL_USER, EMAIL_PASS)
-        mail.select("inbox")
-
-        status, mensagens = mail.search(None, f'(SUBJECT "{ASSUNTO_BUSCA}")')
-        ids_emails = mensagens[0].split()
-
-        if not ids_emails:
-            mail.logout()
-            return f"Nenhum e-mail encontrado com o assunto '{ASSUNTO_BUSCA}'."
-
-        for email_id in reversed(ids_emails[-10:]):
-            _, dados_email = mail.fetch(email_id, "(RFC822)")
-            msg = email.message_from_bytes(dados_email[0][1])
-
-            for parte in msg.walk():
-                if parte.get_content_maintype() == "multipart" or parte.get("Content-Disposition") is None:
-                    continue
-
-                nome_arquivo = decodificar_nome_arquivo(parte.get_filename())
-                if nome_arquivo and nome_arquivo.lower().endswith(".xlsx"):
-                    wb = openpyxl.load_workbook(io.BytesIO(parte.get_payload(decode=True)), read_only=True)
-                    abas = ", ".join(wb.sheetnames)
-                    mail.logout()
-                    return f"📎 Arquivo: <b>{nome_arquivo}</b><br>📑 Abas: [{abas}]"
-
-        mail.logout()
-        return "E-mails encontrados, mas nenhum tinha anexo .xlsx."
-    except Exception as e:
-        return f"Erro ao ler e-mail: {str(e)}"
-
-def encontrar_workbook_com_aba(nome_aba_alvo):
+def baixar_planilha_mais_recente():
     mail = imaplib.IMAP4_SSL(IMAP_SERVER)
     mail.login(EMAIL_USER, EMAIL_PASS)
     mail.select("inbox")
 
+    # Busca pelo prefixo fixo sem acentos para funcionar todo dia independente da data
     status, mensagens = mail.search(None, f'(SUBJECT "{ASSUNTO_BUSCA}")')
     ids_emails = mensagens[0].split()
 
     if not ids_emails:
         mail.logout()
-        raise Exception(f"Nenhum e-mail encontrado com o assunto '{ASSUNTO_BUSCA}'.")
+        raise Exception(f"Nenhum e-mail encontrado com '{ASSUNTO_BUSCA}'.")
 
-    alvo_normalizado = nome_aba_alvo.strip().upper()
-    abas_vistas = []
-
-    for email_id in reversed(ids_emails[-15:]):
+    # Percorre do e-mail mais recente para o mais antigo até achar o anexo ESTOQUE_...xlsx
+    for email_id in reversed(ids_emails[-10:]):
         _, dados_email = mail.fetch(email_id, "(RFC822)")
         msg = email.message_from_bytes(dados_email[0][1])
 
@@ -100,24 +66,17 @@ def encontrar_workbook_com_aba(nome_aba_alvo):
             if parte.get_content_maintype() == "multipart" or parte.get("Content-Disposition") is None:
                 continue
 
-            nome_arquivo = decodificar_nome_arquivo(parte.get_filename())
+            nome_arquivo = decodificar_texto(parte.get_filename())
             if nome_arquivo and nome_arquivo.lower().endswith(".xlsx"):
                 conteudo = parte.get_payload(decode=True)
-                wb = openpyxl.load_workbook(io.BytesIO(conteudo))
-                abas_vistas = wb.sheetnames
-
-                for aba_real in wb.sheetnames:
-                    if aba_real.strip().upper() == alvo_normalizado or alvo_normalizado in aba_real.strip().upper():
-                        mail.logout()
-                        return wb, aba_real
+                mail.logout()
+                return io.BytesIO(conteudo), nome_arquivo
 
     mail.logout()
-    lista_abas = ", ".join(abas_vistas) if abas_vistas else "Nenhuma planilha .xlsx"
-    raise Exception(f"Aba '{nome_aba_alvo}' não encontrada. Abas no arquivo: [{lista_abas}]")
+    raise Exception("E-mail encontrado, mas nenhuma planilha .xlsx estava anexada.")
 
 @app.get("/", response_class=HTMLResponse)
 def pagina_clientes(erro: str = "", selecionado: str = ""):
-    info_anexo = obter_info_ultimo_anexo()
     alerta_html = f'<div class="erro">{erro}</div>' if erro else ""
     
     botoes_html = ""
@@ -141,7 +100,6 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f1f5f9; margin: 0; padding: 20px; color: #1e293b; }}
             .container {{ max-width: 480px; margin: 0 auto; }}
-            .barra-anexo {{ background: #e0f2fe; border: 1px solid #bae6fd; color: #0369a1; padding: 12px; border-radius: 10px; margin-bottom: 18px; font-size: 13px; line-height: 1.5; word-break: break-word; }}
             .header {{ text-align: center; margin-bottom: 24px; }}
             .header h1 {{ font-size: 22px; margin: 0 0 6px 0; color: #0f172a; }}
             .header p {{ font-size: 14px; color: #64748b; margin: 0; }}
@@ -163,9 +121,6 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
     </head>
     <body>
         <div class="container">
-            <div class="barra-anexo">
-                {info_anexo}
-            </div>
             <div class="header">
                 <h1>Estoque Diário - Clientes</h1>
                 <p>Selecione sua empresa abaixo para baixar sua planilha</p>
@@ -218,8 +173,25 @@ def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
         )
 
     try:
-        wb, aba_encontrada = encontrar_workbook_com_aba(aba)
+        arquivo_bytes, nome_original = baixar_planilha_mais_recente()
+        wb = openpyxl.load_workbook(arquivo_bytes)
+        alvo_normalizado = aba.strip().upper()
 
+        # 1. Procura nos nomes das abas da planilha
+        aba_encontrada = None
+        for nome_real in wb.sheetnames:
+            if nome_real.strip().upper() == alvo_normalizado or alvo_normalizado in nome_real.strip().upper():
+                aba_encontrada = nome_real
+                break
+
+        if not aba_encontrada:
+            lista_abas = ", ".join(wb.sheetnames)
+            return HTMLResponse(
+                content=pagina_clientes(erro=f"Aba '{aba}' não encontrada em {nome_original}. Abas existentes: [{lista_abas}]"),
+                status_code=404
+            )
+
+        # 2. Remove todas as outras abas, mantendo apenas a aba do cliente
         for nome_aba in list(wb.sheetnames):
             if nome_aba != aba_encontrada:
                 del wb[nome_aba]
@@ -228,8 +200,10 @@ def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
         wb.save(buffer)
         buffer.seek(0)
 
+        # Usa a data do arquivo original (ex: ESTOQUE_2026-11-22.xlsx -> AZUMA_2026-11-22.xlsx)
         nome_limpo = aba.replace(">>", "-").replace(" ", "_")
-        headers = {"Content-Disposition": f'attachment; filename="Estoque_{nome_limpo}.xlsx"'}
+        sufixo_data = nome_original.replace("ESTOQUE", "").replace(".xlsx", "")
+        headers = {"Content-Disposition": f'attachment; filename="{nome_limpo}{sufixo_data}.xlsx"'}
 
         return StreamingResponse(
             buffer,
