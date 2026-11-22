@@ -16,7 +16,7 @@ EMAIL_PASS = os.getenv("EMAIL_PASS", "")
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.titan.email")
 ASSUNTO_BUSCA = os.getenv("ASSUNTO_BUSCA", "Relatorio")
 
-CLIENTES_SENHAS = {
+CLIENTES_ABAS = {
     "AZUMA": "AZ482",
     "CARLOS AUGUSTO": "CA719",
     "ED PESCADOS": "ED305",
@@ -44,7 +44,7 @@ def decodificar_nome_arquivo(nome_bruto):
             nome_final += texto
     return nome_final
 
-def baixar_anexo_excel():
+def encontrar_workbook_com_aba(nome_aba_alvo):
     mail = imaplib.IMAP4_SSL(IMAP_SERVER)
     mail.login(EMAIL_USER, EMAIL_PASS)
     mail.select("inbox")
@@ -56,32 +56,43 @@ def baixar_anexo_excel():
         mail.logout()
         raise Exception(f"Nenhum e-mail encontrado com o assunto '{ASSUNTO_BUSCA}'.")
 
-    ultimo_id = ids_emails[-1]
-    _, dados_email = mail.fetch(ultimo_id, "(RFC822)")
-    msg = email.message_from_bytes(dados_email[0][1])
+    alvo_normalizado = nome_aba_alvo.strip().upper()
+    abas_vistas = []
 
-    for parte in msg.walk():
-        if parte.get_content_maintype() == "multipart" or parte.get("Content-Disposition") is None:
-            continue
+    # Percorre os últimos 15 e-mails do mais recente para o mais antigo
+    for email_id in reversed(ids_emails[-15:]):
+        _, dados_email = mail.fetch(email_id, "(RFC822)")
+        msg = email.message_from_bytes(dados_email[0][1])
 
-        nome_arquivo = decodificar_nome_arquivo(parte.get_filename())
-        if nome_arquivo and nome_arquivo.lower().endswith(".xlsx"):
-            conteudo = parte.get_payload(decode=True)
-            mail.logout()
-            return io.BytesIO(conteudo)
+        for parte in msg.walk():
+            if parte.get_content_maintype() == "multipart" or parte.get("Content-Disposition") is None:
+                continue
+
+            nome_arquivo = decodificar_nome_arquivo(parte.get_filename())
+            if nome_arquivo and nome_arquivo.lower().endswith(".xlsx"):
+                conteudo = parte.get_payload(decode=True)
+                wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+                abas_vistas = wb.sheetnames
+
+                # Procura o nome exato (ou aproximado) nas abas do arquivo
+                for aba_real in wb.sheetnames:
+                    if aba_real.strip().upper() == alvo_normalizado or alvo_normalizado in aba_real.strip().upper():
+                        mail.logout()
+                        return wb, aba_real
 
     mail.logout()
-    raise Exception("Nenhuma planilha (.xlsx) encontrada no anexo do e-mail.")
+    lista_abas = ", ".join(abas_vistas) if abas_vistas else "Nenhuma planilha .xlsx"
+    raise Exception(f"Aba '{nome_aba_alvo}' não encontrada nos e-mails recentes. Abas do último arquivo: [{lista_abas}]")
 
 @app.get("/", response_class=HTMLResponse)
 def pagina_clientes(erro: str = "", selecionado: str = ""):
     alerta_html = f'<div class="erro">{erro}</div>' if erro else ""
     
     botoes_html = ""
-    for cliente in CLIENTES_SENHAS.keys():
+    for aba in CLIENTES_ABAS.keys():
         botoes_html += f"""
-        <button type="button" class="btn-cliente" onclick="abrirModal('{cliente}')">
-            <span>{cliente}</span>
+        <button type="button" class="btn-cliente" onclick="abrirModal('{aba}')">
+            <span>{aba}</span>
             <span class="seta">→</span>
         </button>
         """
@@ -145,9 +156,9 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
         </div>
 
         <script>
-            function abrirModal(nomeCliente) {{
-                document.getElementById('tituloCliente').innerText = nomeCliente;
-                document.getElementById('inputAba').value = nomeCliente;
+            function abrirModal(nomeAba) {{
+                document.getElementById('tituloCliente').innerText = nomeAba;
+                document.getElementById('inputAba').value = nomeAba;
                 document.getElementById('modalSenha').style.display = 'flex';
                 document.getElementById('inputSenha').focus();
             }}
@@ -164,50 +175,19 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
 def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
     senha_digitada = senha.strip().upper()
 
-    if aba not in CLIENTES_SENHAS or CLIENTES_SENHAS[aba] != senha_digitada:
+    if aba not in CLIENTES_ABAS or CLIENTES_ABAS[aba] != senha_digitada:
         return HTMLResponse(
             content=pagina_clientes(erro=f"Senha incorreta para {aba}.", selecionado=aba),
             status_code=401
         )
 
     try:
-        arquivo_bytes = baixar_anexo_excel()
-        wb = openpyxl.load_workbook(arquivo_bytes)
-        ws = wb.active
+        wb, aba_encontrada = encontrar_workbook_com_aba(aba)
 
-        linha_inicio = None
-        for row_idx in range(30, ws.max_row + 1):
-            val_col_a = str(ws.cell(row=row_idx, column=1).value or "").strip().upper()
-            if val_col_a == aba.strip().upper():
-                linha_inicio = row_idx
-                break
-
-        if not linha_inicio:
-            return HTMLResponse(
-                content=pagina_clientes(erro=f"Bloco do cliente '{aba}' não encontrado na planilha de hoje."),
-                status_code=404
-            )
-
-        todos_titulos = set(k.strip().upper() for k in CLIENTES_SENHAS.keys()) | {
-            "VENCIDOS", "AMAZON NACIONAL", "RECIFE (PEIXE PRETO) AMAZON", "EUA", "ILHAS",
-            "OUTROS DESTINOS (EXP)", "CHINA (P.B. + SD)", "CHINA 2 (PIR. ESPALM.+ PIRAUNA)",
-            "GRUDE", "COREIA", "SR. LUCAS", "KATSU-MAT PRIMA", "KATSU-BOLINHO",
-            "EUA (2025)", "ILHAS (2025)", "AVENCER 30/60/90"
-        }
-
-        linha_fim = ws.max_row
-        for row_idx in range(linha_inicio + 1, ws.max_row + 1):
-            val_col_a = str(ws.cell(row=row_idx, column=1).value or "").strip().upper()
-            if val_col_a in todos_titulos or val_col_a.startswith("SGEP -"):
-                linha_fim = row_idx - 1
-                break
-
-        if linha_fim < ws.max_row:
-            ws.delete_rows(linha_fim + 1, ws.max_row - linha_fim)
-        if linha_inicio > 2:
-            ws.delete_rows(2, linha_inicio - 2)
-
-        ws.title = aba.replace(">>", "-")[:31]
+        # Remove todas as outras abas do arquivo, mantendo apenas a aba do cliente
+        for nome_aba in list(wb.sheetnames):
+            if nome_aba != aba_encontrada:
+                del wb[nome_aba]
 
         buffer = io.BytesIO()
         wb.save(buffer)
@@ -224,6 +204,6 @@ def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
 
     except Exception as e:
         return HTMLResponse(
-            content=pagina_clientes(erro=f"Erro ao gerar planilha: {str(e)}"),
+            content=pagina_clientes(erro=str(e)),
             status_code=500
         )
