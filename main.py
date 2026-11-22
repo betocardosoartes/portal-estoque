@@ -87,14 +87,28 @@ def obter_planilha_mais_recente():
 
 def localizar_aba_cliente(wb, nome_cliente):
     alvo = nome_cliente.strip().upper()
+    # 1. Busca exata ou parcial direta
     for nome_real in wb.sheetnames:
-        if nome_real.strip().upper() == alvo or alvo in nome_real.strip().upper():
+        nr = nome_real.strip().upper()
+        if nr == alvo or alvo in nr or nr in alvo:
             return nome_real
+    # 2. Busca pela primeira palavra (ex: "ED" de "ED PESCADOS", "CARLOS" de "CARLOS AUGUSTO")
+    primeira_palavra = alvo.split()[0]
+    if len(primeira_palavra) >= 2:
+        for nome_real in wb.sheetnames:
+            if primeira_palavra in nome_real.strip().upper():
+                return nome_real
     return None
 
 def formatar_numero(val):
     if val is None or val == "":
         return "0"
+    if isinstance(val, str):
+        val_limpo = val.strip().replace(".", "").replace(",", ".")
+        try:
+            val = float(val_limpo)
+        except ValueError:
+            return val.strip()
     if isinstance(val, float):
         if val.is_integer():
             return f"{int(val):,}".replace(",", ".")
@@ -103,7 +117,6 @@ def formatar_numero(val):
         return f"{val:,}".replace(",", ".")
     return str(val).strip()
 
-# --- TELA 1: LOGIN COM COMBO DE ESTOQUES + SENHA ---
 @app.get("/", response_class=HTMLResponse)
 def tela_login(erro: str = "", selecionado: str = ""):
     alerta_html = f'<div class="erro">{erro}</div>' if erro else ""
@@ -135,7 +148,7 @@ def tela_login(erro: str = "", selecionado: str = ""):
             input[type="password"] {{ text-transform: uppercase; letter-spacing: 2px; font-weight: 600; }}
             button {{ width: 100%; padding: 14px; background: #2563eb; color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 4px; }}
             button:hover {{ background: #1d4ed8; }}
-            .erro {{ background: #fee2e2; color: #b91c1c; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; font-weight: 500; text-align: center; }}
+            .erro {{ background: #fee2e2; color: #b91c1c; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; font-weight: 500; text-align: center; word-break: break-word; }}
         </style>
     </head>
     <body>
@@ -162,7 +175,6 @@ def tela_login(erro: str = "", selecionado: str = ""):
     </html>
     """
 
-# --- TELA 2: VISUALIZAÇÃO OTIMIZADA PARA CELULAR (CARDS) + DOWNLOAD ---
 @app.post("/painel", response_class=HTMLResponse)
 def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
     senha_limpa = senha.strip().upper()
@@ -179,8 +191,9 @@ def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
         aba_encontrada = localizar_aba_cliente(wb, cliente)
 
         if not aba_encontrada:
+            abas_disp = ", ".join(wb.sheetnames)
             return HTMLResponse(
-                content=tela_login(erro=f"Não há saldo registrado para {cliente} no relatório de hoje.", selecionado=cliente),
+                content=tela_login(erro=f"Aba de '{cliente}' não localizada. Abas no arquivo: [{abas_disp}]", selecionado=cliente),
                 status_code=404
             )
 
@@ -193,7 +206,7 @@ def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
             if len(partes) == 3:
                 data_relatorio = f"{partes}/{partes}/{partes}"
 
-        # Mapeia dinamicamente os índices das colunas a partir da linha de cabeçalho (Cod.Ext, Produto, Vol, Saldo Kgs)
+        # Mapeamento padrão das colunas (0=Cod.Ext, 1=NF, 2=Produto, 3=Sec, 4=Pri, 5=Vol, 6=Saldo Kgs)
         col_map = {"cod": 0, "nf": 1, "produto": 2, "sec": 3, "pri": 4, "vol": 5, "kgs": 6}
         itens_html = ""
         total_geral_vol = ""
@@ -206,12 +219,11 @@ def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
 
             texto_linha = " ".join(valores_nao_vazios).upper()
 
-            # Ignora linhas de título geral ou links de navegação
             if "VOLTAR AO RESUMO" in texto_linha or "DENTRO DA VALIDADE" in texto_linha or "DATA-BASE" in texto_linha:
                 continue
 
-            # Identifica cabeçalho da tabela para mapear as colunas exatas
-            if "PRODUTO" in texto_linha and ("VOL" in texto_linha or "SALDO" in texto_linha):
+            # Detecta linha de cabeçalho da tabela para ajustar índices se houver coluna extra
+            if "PRODUTO" in texto_linha and ("VOL" in texto_linha or "SALDO" in texto_linha or "KG" in texto_linha):
                 for idx, val in enumerate(row):
                     v_up = str(val or "").strip().upper()
                     if "COD" in v_up and "NF" not in v_up:
@@ -230,10 +242,6 @@ def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
                         col_map["kgs"] = idx
                 continue
 
-            # Ignora a linha do título do cliente no topo da aba
-            if valores_nao_vazios[0].upper() == cliente.strip().upper():
-                continue
-
             # Captura Total Geral da Categoria
             if "TOTAL DA CATEGORIA" in texto_linha:
                 vol_val = row[col_map["vol"]] if len(row) > col_map["vol"] else ""
@@ -242,7 +250,11 @@ def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
                 total_geral_kgs = formatar_numero(kgs_val)
                 continue
 
-            # Captura Subtotais ou Totais de Bloco (ex: NACIONAL / EXPORTAÇÃO)
+            # Ignora apenas a linha de título superior do cliente (que tem TOTAL no topo)
+            if valores_nao_vazios[0].upper() in [cliente.strip().upper(), aba_encontrada.strip().upper()] and "TOTAL" in texto_linha:
+                continue
+
+            # Captura Subtotais ou Totais de Bloco
             if "SUBTOTAL" in texto_linha or texto_linha.startswith("TOTAL "):
                 titulo_sub = next((v for v in valores_nao_vazios if "TOTAL" in v.upper()), "Subtotal")
                 vol_val = row[col_map["vol"]] if len(row) > col_map["vol"] else ""
@@ -258,17 +270,18 @@ def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
                 """
                 continue
 
-            # Captura divisores de bloco (ex: NACIONAL, EXPORTAÇÃO)
+            # Captura divisores de bloco
             if len(valores_nao_vazios) == 1 and valores_nao_vazios[0].upper() in ["NACIONAL", "EXPORTAÇÃO", "COM REGISTRO", "SEM REGISTRO"]:
                 itens_html += f'<div class="divisor-bloco">{valores_nao_vazios[0].upper()}</div>'
                 continue
 
-            # Linha normal de produto
-            if len(row) > col_map["produto"] and row[col_map["produto"]]:
-                cod = str(row[col_map["cod"]] or "").strip()
-                produto = str(row[col_map["produto"]] or "").strip()
-                sec = str(row[col_map["sec"]] or "").strip()
-                pri = str(row[col_map["pri"]] or "").strip()
+            # Linha de produto: verifica se existe texto na coluna de Produto
+            prod_raw = row[col_map["produto"]] if len(row) > col_map["produto"] else None
+            if prod_raw and str(prod_raw).strip() != "":
+                cod = str(row[col_map["cod"]] or "").strip() if len(row) > col_map["cod"] else ""
+                produto = str(prod_raw).strip()
+                sec = str(row[col_map["sec"]] or "").strip() if len(row) > col_map["sec"] else ""
+                pri = str(row[col_map["pri"]] or "").strip() if len(row) > col_map["pri"] else ""
                 vol = formatar_numero(row[col_map["vol"]] if len(row) > col_map["vol"] else 0)
                 kgs = formatar_numero(row[col_map["kgs"]] if len(row) > col_map["kgs"] else 0)
 
@@ -384,7 +397,6 @@ def painel_cliente(cliente: str = Form(...), senha: str = Form(...)):
     except Exception as e:
         return HTMLResponse(content=tela_login(erro=f"Erro ao carregar estoque: {str(e)}", selecionado=cliente), status_code=500)
 
-# --- ROTA DE DOWNLOAD DO ARQUIVO EXCEL ---
 @app.post("/baixar-excel")
 def baixar_excel(cliente: str = Form(...), senha: str = Form(...)):
     senha_limpa = senha.strip().upper()
