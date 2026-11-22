@@ -11,13 +11,11 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 app = FastAPI()
 socket.setdefaulttimeout(15)
 
-# --- CONFIGURAÇÕES DO E-MAIL (Vêm do Render) ---
 EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASS = os.getenv("EMAIL_PASS", "")
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.titan.email")
 ASSUNTO_BUSCA = os.getenv("ASSUNTO_BUSCA", "Relatorio")
 
-# --- LISTA DE CLIENTES (Nome exato da Aba -> Senha) ---
 CLIENTES_ABAS = {
     "AZUMA": "AZ482",
     "CARLOS AUGUSTO": "CA719",
@@ -107,7 +105,7 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
             .btn-cliente {{ background: white; border: 1px solid #e2e8f0; padding: 16px 20px; border-radius: 10px; font-size: 15px; font-weight: 600; color: #1e293b; display: flex; justify-content: space-between; align-items: center; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.15s; text-align: left; }}
             .btn-cliente:hover {{ border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }}
             .seta {{ color: #94a3b8; font-weight: bold; }}
-            .erro {{ background: #fee2e2; color: #b91c1c; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; text-align: center; font-weight: 500; }}
+            .erro {{ background: #fee2e2; color: #b91c1c; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; text-align: center; font-weight: 500; word-break: break-word; }}
             
             .modal-bg {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); justify-content: center; align-items: center; padding: 15px; box-sizing: border-box; }}
             .modal {{ background: white; padding: 25px; border-radius: 14px; width: 100%; max-width: 360px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }}
@@ -176,14 +174,23 @@ def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
         arquivo_bytes = baixar_anexo_excel()
         wb = openpyxl.load_workbook(arquivo_bytes)
 
-        if aba not in wb.sheetnames:
+        # Busca a aba ignorando espaços extras e diferenças de maiúsculas/minúsculas
+        aba_encontrada = None
+        for nome_real in wb.sheetnames:
+            if nome_real.strip().upper() == aba.strip().upper() or aba.strip().upper() in nome_real.strip().upper():
+                aba_encontrada = nome_real
+                break
+
+        if not aba_encontrada:
+            abas_disponiveis = ", ".join(wb.sheetnames)
             return HTMLResponse(
-                content=pagina_clientes(erro=f"A aba '{aba}' não foi encontrada na planilha de hoje."),
+                content=pagina_clientes(erro=f"Aba '{aba}' não encontrada. Abas existentes no arquivo: [{abas_disponiveis}]"),
                 status_code=404
             )
 
+        # Remove todas as outras abas, mantendo apenas a do cliente
         for nome_aba in wb.sheetnames:
-            if nome_aba != aba:
+            if nome_aba != aba_encontrada:
                 del wb[nome_aba]
 
         buffer = io.BytesIO()
