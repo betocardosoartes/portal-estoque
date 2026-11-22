@@ -1,5 +1,6 @@
 import imaplib
 import email
+from email.header import decode_header
 import io
 import os
 import socket
@@ -13,7 +14,7 @@ socket.setdefaulttimeout(15)
 # --- CONFIGURAÇÕES DO E-MAIL (Vêm do Render) ---
 EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASS = os.getenv("EMAIL_PASS", "")
-IMAP_SERVER = os.getenv("IMAP_SERVER", "://gmail.com")
+IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.titan.email")
 ASSUNTO_BUSCA = os.getenv("ASSUNTO_BUSCA", "Relatorio")
 
 # --- LISTA DE CLIENTES (Nome exato da Aba -> Senha) ---
@@ -33,13 +34,25 @@ CLIENTES_ABAS = {
     "ALLFOODS": "AF512",
 }
 
+def decodificar_nome_arquivo(nome_bruto):
+    if not nome_bruto:
+        return ""
+    partes = decode_header(nome_bruto)
+    nome_final = ""
+    for texto, encoding in partes:
+        if isinstance(texto, bytes):
+            nome_final += texto.decode(encoding or "utf-8", errors="ignore")
+        else:
+            nome_final += texto
+    return nome_final
+
 def baixar_anexo_excel():
     mail = imaplib.IMAP4_SSL(IMAP_SERVER)
     mail.login(EMAIL_USER, EMAIL_PASS)
     mail.select("inbox")
 
     status, mensagens = mail.search(None, f'(SUBJECT "{ASSUNTO_BUSCA}")')
-    ids_emails = mensagens.split()
+    ids_emails = mensagens[0].split()
 
     if not ids_emails:
         mail.logout()
@@ -47,14 +60,14 @@ def baixar_anexo_excel():
 
     ultimo_id = ids_emails[-1]
     _, dados_email = mail.fetch(ultimo_id, "(RFC822)")
-    msg = email.message_from_bytes(dados_email)
+    msg = email.message_from_bytes(dados_email[0][1])
 
     for parte in msg.walk():
         if parte.get_content_maintype() == "multipart" or parte.get("Content-Disposition") is None:
             continue
 
-        nome_arquivo = parte.get_filename()
-        if nome_arquivo and nome_arquivo.endswith(".xlsx"):
+        nome_arquivo = decodificar_nome_arquivo(parte.get_filename())
+        if nome_arquivo and nome_arquivo.lower().endswith(".xlsx"):
             conteudo = parte.get_payload(decode=True)
             mail.logout()
             return io.BytesIO(conteudo)
@@ -66,7 +79,6 @@ def baixar_anexo_excel():
 def pagina_clientes(erro: str = "", selecionado: str = ""):
     alerta_html = f'<div class="erro">{erro}</div>' if erro else ""
     
-    # Gera os botões para cada cliente
     botoes_html = ""
     for aba in CLIENTES_ABAS.keys():
         botoes_html += f"""
@@ -76,7 +88,6 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
         </button>
         """
 
-    # Se houve erro de senha, já reabre o modal no cliente selecionado
     script_reabrir = f"abrirModal('{selecionado}');" if selecionado else ""
 
     return f"""
@@ -98,7 +109,6 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
             .seta {{ color: #94a3b8; font-weight: bold; }}
             .erro {{ background: #fee2e2; color: #b91c1c; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; text-align: center; font-weight: 500; }}
             
-            /* Modal de Senha */
             .modal-bg {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); justify-content: center; align-items: center; padding: 15px; box-sizing: border-box; }}
             .modal {{ background: white; padding: 25px; border-radius: 14px; width: 100%; max-width: 360px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }}
             .modal h3 {{ margin: 0 0 8px 0; font-size: 18px; color: #0f172a; }}
@@ -156,7 +166,6 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
 def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
     senha_digitada = senha.strip().upper()
 
-    # 1. Valida se o cliente existe e se a senha confere
     if aba not in CLIENTES_ABAS or CLIENTES_ABAS[aba] != senha_digitada:
         return HTMLResponse(
             content=pagina_clientes(erro=f"Senha incorreta para {aba}.", selecionado=aba),
@@ -164,28 +173,23 @@ def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
         )
 
     try:
-        # 2. Baixa o arquivo Excel completo do e-mail
         arquivo_bytes = baixar_anexo_excel()
         wb = openpyxl.load_workbook(arquivo_bytes)
 
-        # 3. Verifica se a aba existe na planilha
         if aba not in wb.sheetnames:
             return HTMLResponse(
                 content=pagina_clientes(erro=f"A aba '{aba}' não foi encontrada na planilha de hoje."),
                 status_code=404
             )
 
-        # 4. Remove todas as outras abas, mantendo apenas a do cliente selecionado
         for nome_aba in wb.sheetnames:
             if nome_aba != aba:
                 del wb[nome_aba]
 
-        # 5. Salva o novo arquivo Excel com apenas 1 aba na memória
         buffer = io.BytesIO()
         wb.save(buffer)
         buffer.seek(0)
 
-        # Limpa caracteres especiais (como >>) para o nome do arquivo baixado
         nome_limpo = aba.replace(">>", "-").replace(" ", "_")
         headers = {"Content-Disposition": f'attachment; filename="Estoque_{nome_limpo}.xlsx"'}
 
