@@ -16,7 +16,7 @@ EMAIL_PASS = os.getenv("EMAIL_PASS", "")
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.titan.email")
 ASSUNTO_BUSCA = os.getenv("ASSUNTO_BUSCA", "Relatorio")
 
-CLIENTES_ABAS = {
+CLIENTES_SENHAS = {
     "AZUMA": "AZ482",
     "CARLOS AUGUSTO": "CA719",
     "ED PESCADOS": "ED305",
@@ -78,10 +78,10 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
     alerta_html = f'<div class="erro">{erro}</div>' if erro else ""
     
     botoes_html = ""
-    for aba in CLIENTES_ABAS.keys():
+    for cliente in CLIENTES_SENHAS.keys():
         botoes_html += f"""
-        <button type="button" class="btn-cliente" onclick="abrirModal('{aba}')">
-            <span>{aba}</span>
+        <button type="button" class="btn-cliente" onclick="abrirModal('{cliente}')">
+            <span>{cliente}</span>
             <span class="seta">→</span>
         </button>
         """
@@ -145,9 +145,9 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
         </div>
 
         <script>
-            function abrirModal(nomeAba) {{
-                document.getElementById('tituloCliente').innerText = nomeAba;
-                document.getElementById('inputAba').value = nomeAba;
+            function abrirModal(nomeCliente) {{
+                document.getElementById('tituloCliente').innerText = nomeCliente;
+                document.getElementById('inputAba').value = nomeCliente;
                 document.getElementById('modalSenha').style.display = 'flex';
                 document.getElementById('inputSenha').focus();
             }}
@@ -164,7 +164,7 @@ def pagina_clientes(erro: str = "", selecionado: str = ""):
 def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
     senha_digitada = senha.strip().upper()
 
-    if aba not in CLIENTES_ABAS or CLIENTES_ABAS[aba] != senha_digitada:
+    if aba not in CLIENTES_SENHAS or CLIENTES_SENHAS[aba] != senha_digitada:
         return HTMLResponse(
             content=pagina_clientes(erro=f"Senha incorreta para {aba}.", selecionado=aba),
             status_code=401
@@ -173,25 +173,41 @@ def baixar_aba(aba: str = Form(...), senha: str = Form(...)):
     try:
         arquivo_bytes = baixar_anexo_excel()
         wb = openpyxl.load_workbook(arquivo_bytes)
+        ws = wb.active
 
-        # Busca a aba ignorando espaços extras e diferenças de maiúsculas/minúsculas
-        aba_encontrada = None
-        for nome_real in wb.sheetnames:
-            if nome_real.strip().upper() == aba.strip().upper() or aba.strip().upper() in nome_real.strip().upper():
-                aba_encontrada = nome_real
+        linha_inicio = None
+        for row_idx in range(30, ws.max_row + 1):
+            val_col_a = str(ws.cell(row=row_idx, column=1).value or "").strip().upper()
+            if val_col_a == aba.strip().upper():
+                linha_inicio = row_idx
                 break
 
-        if not aba_encontrada:
-            abas_disponiveis = ", ".join(wb.sheetnames)
+        if not linha_inicio:
             return HTMLResponse(
-                content=pagina_clientes(erro=f"Aba '{aba}' não encontrada. Abas existentes no arquivo: [{abas_disponiveis}]"),
+                content=pagina_clientes(erro=f"Bloco do cliente '{aba}' não encontrado na planilha de hoje."),
                 status_code=404
             )
 
-        # Remove todas as outras abas, mantendo apenas a do cliente
-        for nome_aba in wb.sheetnames:
-            if nome_aba != aba_encontrada:
-                del wb[nome_aba]
+        todos_titulos = set(k.strip().upper() for k in CLIENTES_SENHAS.keys()) | {
+            "VENCIDOS", "AMAZON NACIONAL", "RECIFE (PEIXE PRETO) AMAZON", "EUA", "ILHAS",
+            "OUTROS DESTINOS (EXP)", "CHINA (P.B. + SD)", "CHINA 2 (PIR. ESPALM.+ PIRAUNA)",
+            "GRUDE", "COREIA", "SR. LUCAS", "KATSU-MAT PRIMA", "KATSU-BOLINHO",
+            "EUA (2025)", "ILHAS (2025)", "AVENCER 30/60/90"
+        }
+
+        linha_fim = ws.max_row
+        for row_idx in range(linha_inicio + 1, ws.max_row + 1):
+            val_col_a = str(ws.cell(row=row_idx, column=1).value or "").strip().upper()
+            if val_col_a in todos_titulos or val_col_a.startswith("SGEP -"):
+                linha_fim = row_idx - 1
+                break
+
+        if linha_fim < ws.max_row:
+            ws.delete_rows(linha_fim + 1, ws.max_row - linha_fim)
+        if linha_inicio > 2:
+            ws.delete_rows(2, linha_inicio - 2)
+
+        ws.title = aba.replace(">>", "-")[:31]
 
         buffer = io.BytesIO()
         wb.save(buffer)
