@@ -1,20 +1,29 @@
 import imaplib
 import email
 import io
+import os
+import socket
 import pandas as pd
 from fastapi import FastAPI
 
 app = FastAPI()
 
-# --- PREENCHA SEUS DADOS AQUI (APENAS PARA TESTE) ---
-EMAIL_USER = "estoque@amazonnorte.com"
-EMAIL_PASS = "B3to@464"
-IMAP_SERVER = "mail.amazonnorte.com"
-ASSUNTO_BUSCA = "WEBSGEP - ESTOQUE DIÁRIO AMAZON"
-# ----------------------------------------------------
+# Define um limite máximo de 10 segundos para não travar a página
+socket.setdefaulttimeout(10)
 
+EMAIL_USER = os.getenv("EMAIL_USER", "seu_email@gmail.com")
+EMAIL_PASS = os.getenv("EMAIL_PASS", "sua_senha_de_app")
+IMAP_SERVER = os.getenv("IMAP_SERVER", "://gmail.com")
+ASSUNTO_BUSCA = os.getenv("ASSUNTO_BUSCA", "Relatorio")
+
+# Rota 1: Teste rápido para saber se o site está online (abre na hora)
 @app.get("/")
-def testar():
+def inicio():
+    return {"status": "Online!", "mensagem": "O servidor Render esta funcionando. Acesse /testar-email para ler a planilha."}
+
+# Rota 2: Teste de conexão com o e-mail
+@app.get("/testar-email")
+def testar_email():
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL_USER, EMAIL_PASS)
@@ -25,7 +34,7 @@ def testar():
 
         if not ids_emails:
             mail.logout()
-            return {"status": "Erro", "mensagem": "Nenhum e-mail encontrado com esse assunto."}
+            return {"status": "Aviso", "mensagem": f"Conectou no e-mail, mas nao achou assunto '{ASSUNTO_BUSCA}'."}
 
         ultimo_id = ids_emails[-1]
         _, dados_email = mail.fetch(ultimo_id, "(RFC822)")
@@ -48,6 +57,6 @@ def testar():
                 }
 
         mail.logout()
-        return {"status": "Erro", "mensagem": "E-mail achado, mas sem planilha anexada."}
+        return {"status": "Aviso", "mensagem": "E-mail encontrado, mas sem planilha .xlsx ou .csv anexada."}
     except Exception as e:
-        return {"status": "Falha", "erro": str(e)}
+        return {"status": "Erro na conexao", "detalhe": str(e)}
